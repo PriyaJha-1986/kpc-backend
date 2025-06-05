@@ -43,3 +43,7 @@ app.post('/placeOrder', async (req, res) => {
     return res.status(500).json({ error: error.message });
   }
 });
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
