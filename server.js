@@ -24,18 +24,15 @@ const db = admin.firestore();
 
 const app = express();
 // ✅ 2. Secure CORS
-const allowedOrigins = ['https://kanhaposhakcreations.onrender.com', 'http://127.0.0.1:5500', 'http://localhost:5500'];
 app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('CORS not allowed from this origin'));
-    }
-  }
+  origin: [
+    'https://kanhaposhakcreations.onrender.com', 
+    'http://127.0.0.1:5500', 
+    'http://localhost:5500'
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
-
-app.use(express.json());
 
 // ✅ 3. Razorpay Initialization
 const razorpay = new Razorpay({
