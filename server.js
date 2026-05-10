@@ -37,6 +37,10 @@ app.use(cors({
 app.use(express.json());
 
 // ✅ 3. Razorpay Initialization
+console.log("--- DEBUG SECRETS ---");
+console.log("Does Key ID exist?", !!process.env.RAZORPAY_KEY_ID);
+console.log("Does Key Secret exist?", !!process.env.RAZORPAY_KEY_SECRET);
+console.log("---------------------");
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET
