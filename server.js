@@ -3,7 +3,6 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
-import fetch from 'node-fetch';
 import admin from 'firebase-admin';
 
 dotenv.config();
