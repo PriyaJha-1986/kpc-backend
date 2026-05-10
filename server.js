@@ -42,8 +42,8 @@ console.log("Does Key ID exist?", !!process.env.RAZORPAY_KEY_ID);
 console.log("Does Key Secret exist?", !!process.env.RAZORPAY_KEY_SECRET);
 console.log("---------------------");
 const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET
+  key_id: process.env.RAZORPAY_KEY_ID.trim(),
+  key_secret: process.env.RAZORPAY_KEY_SECRET.trim()
 });
 
 // ✅ 4. Shiprocket Configuration
@@ -170,7 +170,7 @@ app.post('/verify-payment', (req, res) => {
     const body = razorpay_order_id + "|" + razorpay_payment_id;
 
     const expectedSignature = crypto
-        .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+        .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET.trim())
         .update(body.toString())
         .digest("hex");
 
