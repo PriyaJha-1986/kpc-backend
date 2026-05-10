@@ -5,19 +5,25 @@ import Razorpay from 'razorpay';
 import crypto from 'crypto';
 import fetch from 'node-fetch';
 import admin from 'firebase-admin';
-import serviceAccount from './firebase-service-account.json' assert { type: "json" };
 
 dotenv.config();
 
-// ✅ 1. Initialize Firebase Admin
-// This gives your backend secure, read-only access to verify product prices
+// ✅ 1. Initialize Firebase Admin using Environment Variables
+// We use .replace(/\\n/g, '\n') because hosting providers sometimes escape newline characters in environment variables.
+const privateKey = process.env.FIREBASE_PRIVATE_KEY 
+    ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') 
+    : undefined;
+
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
+  credential: admin.credential.cert({
+    projectId: process.env.FIREBASE_PROJECT_ID,
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+    privateKey: privateKey
+  })
 });
 const db = admin.firestore();
 
 const app = express();
-
 // ✅ 2. Secure CORS
 const allowedOrigins = ['https://kanhaposhakcreations.onrender.com', 'http://127.0.0.1:5500', 'http://localhost:5500'];
 app.use(cors({
