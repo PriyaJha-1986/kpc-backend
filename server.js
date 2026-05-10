@@ -34,6 +34,8 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
+app.use(express.json());
+
 // ✅ 3. Razorpay Initialization
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
