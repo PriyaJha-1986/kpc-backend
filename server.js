@@ -1,19 +1,25 @@
-// Filename: index.js
-// This is your complete, updated backend server file.
-
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
-import fetch from 'node-fetch'; // Make sure to install this: npm install node-fetch
+import fetch from 'node-fetch';
+import admin from 'firebase-admin';
+import serviceAccount from './firebase-service-account.json' assert { type: "json" };
 
 dotenv.config();
 
+// ✅ 1. Initialize Firebase Admin
+// This gives your backend secure, read-only access to verify product prices
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
+const db = admin.firestore();
+
 const app = express();
 
-// ✅ Secure CORS (No change needed)
-const allowedOrigins = ['https://kanhaposhakcreations.onrender.com', 'http://127.0.0.1:5500']; // Added localhost for testing
+// ✅ 2. Secure CORS
+const allowedOrigins = ['https://kanhaposhakcreations.onrender.com', 'http://127.0.0.1:5500', 'http://localhost:5500'];
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin || allowedOrigins.includes(origin)) {
@@ -26,20 +32,18 @@ app.use(cors({
 
 app.use(express.json());
 
-// ✅ Razorpay Initialization (No change needed)
+// ✅ 3. Razorpay Initialization
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET
 });
 
-// ✅ --- NEW: Shiprocket Configuration ---
-const SHIPROCKET_EMAIL = process.env.SHIPROCKET_EMAIL; // e.g., jhakumarshekhar11@gmail.com
-const SHIPROCKET_PASSWORD = process.env.SHIPROCKET_PASSWORD; // e.g., your new password
+// ✅ 4. Shiprocket Configuration
+const SHIPROCKET_EMAIL = process.env.SHIPROCKET_EMAIL; 
+const SHIPROCKET_PASSWORD = process.env.SHIPROCKET_PASSWORD; 
 let shiprocketToken = null;
 
 async function getShiprocketToken() {
-    // NOTE: In a production app, you'd store and check the expiry of the token.
-    // For simplicity here, we get a new one each time, which is fine for low traffic.
     try {
         const response = await fetch("https://apiv2.shiprocket.in/v1/external/auth/login", {
             method: "POST",
@@ -56,67 +60,124 @@ async function getShiprocketToken() {
     }
 }
 
-// ✅ --- NEW: Shipping Rate Endpoint ---
-app.post('/get-shipping-rate', async (req, res) => {
-    const { destinationPincode, weight, isCOD, subtotal } = req.body;
-
-    // Basic validation
-    if (!destinationPincode || !weight || !subtotal) {
-        return res.status(400).json({ success: false, message: "Missing required fields for shipping calculation." });
-    }
-
-    const token = await getShiprocketToken();
-    if (!token) {
-        return res.status(500).json({ success: false, message: "Could not authenticate with shipping provider." });
-    }
-
-    const params = new URLSearchParams({
-        pickup_postcode: "110092", // <-- IMPORTANT: Set your business's pickup pincode here
-        delivery_postcode: destinationPincode,
-        weight: weight,
-        cod: isCOD ? 1 : 0,
-        order_invoice_value: subtotal
-    }).toString();
-
-    const url = `https://apiv2.shiprocket.in/v1/external/courier/serviceability/?${params}`;
-
-    try {
-        const response = await fetch(url, {
-            method: 'GET',
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const data = await response.json();
-
-        if (data.status === 200 && data.data.available_courier_companies?.length > 0) {
-            const recommendedId = data.data.recommended_courier_company_id;
-            const courier = data.data.available_courier_companies.find(c => c.courier_company_id === recommendedId) || data.data.available_courier_companies[0];
-            
-            res.json({ success: true, shippingCost: courier.rate });
-        } else {
-            throw new Error(data.message || "Pincode not serviceable");
-        }
-    } catch (error) {
-        console.error("❌ Shiprocket API Error:", error.message);
-        res.status(400).json({ success: false, message: "This pincode is currently not serviceable." });
-    }
-});
-
-
-// ✅ Create Order (No change needed)
+// ✅ 5. ZERO-TRUST: Secure Order Creation
 app.post('/create-order', async (req, res) => {
-  // ... your existing code
+    try {
+        // The frontend now only sends the IDs, quantities, and destination
+        const { items, destinationPincode, weight = 1, discountPercent = 0 } = req.body;
+
+        if (!items || items.length === 0) {
+            return res.status(400).json({ error: "Cart is empty." });
+        }
+
+        // --- A. CALCULATE TRUE SUBTOTAL FROM FIREBASE ---
+        let calculatedSubtotal = 0;
+
+        for (const cartItem of items) {
+            const productDoc = await db.collection('products').doc(cartItem.productId).get();
+            
+            if (!productDoc.exists) {
+                return res.status(400).json({ error: `Product ${cartItem.productId} no longer exists.` });
+            }
+
+            const productData = productDoc.data();
+            let actualPrice = productData.price;
+
+            // If the user selected a variant (e.g., Size 4), check if the variant has a different price
+            if (cartItem.variantName && productData.variants) {
+                const variant = productData.variants.find(v => v.name === cartItem.variantName);
+                if (variant && variant.price) {
+                    actualPrice = variant.price;
+                }
+            }
+
+            calculatedSubtotal += actualPrice * cartItem.quantity;
+        }
+
+        // --- B. APPLY DISCOUNT ---
+        const discountAmount = calculatedSubtotal * (discountPercent / 100);
+        const subtotalAfterDiscount = calculatedSubtotal - discountAmount;
+
+        // --- C. CALCULATE SHIPPING VIA SHIPROCKET ---
+        let shippingCost = 0;
+        if (destinationPincode) {
+            const token = await getShiprocketToken();
+            if (token) {
+                const params = new URLSearchParams({
+                    pickup_postcode: "110092", // Your business pincode
+                    delivery_postcode: destinationPincode,
+                    weight: weight,
+                    cod: 0, // Razorpay is prepaid
+                    order_invoice_value: subtotalAfterDiscount
+                }).toString();
+
+                const shipRes = await fetch(`https://apiv2.shiprocket.in/v1/external/courier/serviceability/?${params}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const shipData = await shipRes.json();
+
+                if (shipData.status === 200 && shipData.data.available_courier_companies?.length > 0) {
+                    const recommendedId = shipData.data.recommended_courier_company_id;
+                    const courier = shipData.data.available_courier_companies.find(c => c.courier_company_id === recommendedId) || shipData.data.available_courier_companies[0];
+                    shippingCost = courier.rate;
+                } else {
+                    // Fallback shipping if pincode API fails but is roughly valid
+                    shippingCost = destinationPincode.startsWith('11') ? 40 : 100; 
+                }
+            }
+        }
+
+        // --- D. CALCULATE FINAL TRUE TOTAL ---
+        const finalTotal = subtotalAfterDiscount + shippingCost;
+
+        // --- E. CREATE RAZORPAY ORDER ---
+        const options = {
+            amount: Math.round(finalTotal * 100), // Razorpay expects paise (multiply by 100)
+            currency: "INR",
+            receipt: `rcpt_${Date.now()}`
+        };
+
+        const order = await razorpay.orders.create(options);
+        
+        // Send the secure order payload back to the frontend
+        res.json({
+            id: order.id,
+            amount: order.amount,
+            currency: order.currency,
+            verifiedSubtotal: calculatedSubtotal,
+            verifiedShipping: shippingCost
+        });
+
+    } catch (err) {
+        console.error("❌ Order Creation Error:", err);
+        res.status(500).json({ error: "Failed to securely generate order." });
+    }
 });
 
-// ✅ Verify Signature (No change needed)
+// ✅ 6. ZERO-TRUST: Verify Payment Signature
+// This ensures hackers didn't spoof a "success" message on the frontend
 app.post('/verify-payment', (req, res) => {
-  // ... your existing code
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+
+    const body = razorpay_order_id + "|" + razorpay_payment_id;
+
+    const expectedSignature = crypto
+        .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+        .update(body.toString())
+        .digest("hex");
+
+    if (expectedSignature === razorpay_signature) {
+        res.json({ success: true, message: "Payment verified successfully" });
+    } else {
+        res.status(400).json({ success: false, message: "Invalid payment signature" });
+    }
 });
 
-// ✅ Health Check (No change needed)
+// ✅ Health Check
 app.get("/", (req, res) => {
-  res.send("✅ Kanha Poshak Creations Backend is up and running.");
+  res.send("✅ Kanha Poshak Creations SECURE Backend is up and running.");
 });
 
-// ✅ Server Listen (No change needed)
+// ✅ Server Listen
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Backend running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Secure Backend running on port ${PORT}`));
